@@ -4,6 +4,16 @@ import numpy as np
 from scipy.stats import truncnorm
 import pandas as pd
 
+def get_winner( game, result ):
+    if result[0] > result[1]:
+        winner = game[0]
+    elif result[0] < result[1]:
+        winner = game[1]
+    else:
+        #TODO: use some more sophisticated method to solve the draw than this
+        winner = game[0]
+    return winner
+
 class fooracle:
     """Football oracle
     based on historical results it will tell you what the future brings.
@@ -37,7 +47,7 @@ class fooracle:
         participants = ( data.home_team.isin( self.guests + [self.host] ) & ( data.away_team.isin( self.guests + [self.host] ) ) )
         self.criteria = ((neutral_territory | in_host_country) & non_friendly) & participants
         self.data = data[self.criteria]
-        self.talk('I can see your past...')
+        self.talk('I can see the past, now I\'m ready to tell the future...')
 
     def train_model( self, data = None ):
         """Fits a truncated normal distribution to the home_score and away_score of the given data set (or the previously loaded data set).
@@ -88,6 +98,49 @@ class fooracle:
         self.talk('It will end', team1_score, ':', team2_score)
         return team1_score, team2_score
 
+    def foretell_games( self, games ):
+        """Predicts all results in the list games. Each entry must be a list of 2 countries.
+        """
+        results = []
+        for game in games:
+            game_result = self.foretell( game[0], game[1] )
+            results.append(game_result)
+
+        return results
+
+    def foretell_league( self, group, return_match = False ):
+        games = []
+        for ii in range(len(group)):
+            for jj in range(ii+1, len(group)):
+                games.append( [ group[ii], group[jj] ] )
+
+        if return_match:
+            for ii in range(len(games)):
+                games.append(games[ii][::-1])
+        
+        results = self.foretell_games( games )
+        return results
+
+    def foretell_playoff( self, games ):
+        if len(games) > 1 and len(games)%2 == 1:
+            raise ValueError('Uneven number of games in tournament.')
+        
+        results = self.foretell_games( games )
+        if len(results) == 1:
+            return get_winner( games[0], results[0] )
+
+        next_round = []
+        buffer = None
+        for ii in range(len(results)):
+            winner = get_winner(games[ii], results[ii])
+            if buffer is None:
+                buffer = winner
+            else:
+                next_round.append( [ buffer, winner ] )
+                buffer = None
+        
+        return self.foretell_playoff( next_round )
+
     def talk( self, *args ):
         if self.verbose:
             print(*args)
@@ -108,4 +161,7 @@ if __name__ == '__main__':
 
     data = pd.read_csv(data_file)
     foo = fooracle(data)
-    foo.foretell( team1, team2 )
+    res = foo.foretell( team1, team2 )
+
+    if not foo.verbose:
+        print(res[0], res[1])
