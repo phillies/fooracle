@@ -14,6 +14,27 @@ def get_winner( game, result ):
         winner = game[0]
     return winner
 
+def calculate_league_standing( teams, games, results ):
+    standings = pd.DataFrame(index = teams, columns=['points', 'goals_scored', 'goals_taken']).fillna(0)
+    for (game, result) in zip(games, results):
+        if result[0] == result[1]:
+            standings.loc[game[0]].points += 1
+            standings.loc[game[1]].points += 1
+        elif result[0] > result[1]:
+            standings.loc[game[0]].points += 3
+        else:
+            standings.loc[game[1]].points += 3
+
+        standings.loc[game[0]].goals_scored += result[0]
+        standings.loc[game[0]].goals_taken += result[1]
+
+        standings.loc[game[1]].goals_scored += result[1]
+        standings.loc[game[1]].goals_taken += result[0]
+    standings['goal_difference'] = standings['goals_scored'] - standings['goals_taken']
+    standings = standings.sort_values(by=['points', 'goal_difference', 'goals_scored'], ascending=False)
+    return standings
+
+
 class fooracle:
     """Football oracle
     based on historical results it will tell you what the future brings.
@@ -27,7 +48,7 @@ class fooracle:
     data = None
     parameter_home = None
     parameter_away = None
-    minimal_sample_size = 20
+    minimal_sample_size = 5
     verbose = True
 
     def __init__( self, data = None ):
@@ -85,17 +106,17 @@ class fooracle:
 
     def foretell( self, team1 = None, team2 = None ):
         if team1 is None or team2 is None:
-            self.talk('Your teams are incomprehensible. I will look into the future anyhow...')
+            #self.talk('Your teams are incomprehensible. I will look into the future anyhow...')
             team1_parameter, team2_parameter = self.train_model()
         else:
-            self.talk('Good.', team1, 'vs.', team2, '- I will look into the future...')
+            #self.talk('Good.', team1, 'vs.', team2, '- I will look into the future...')
             team1_parameter, team2_parameter = self.train_model_on_teams( team1, team2 )
 
         a, b, loc, scale = team1_parameter
         team1_score = int(np.round(truncnorm.rvs(a, b, loc=loc, scale=scale)))
         a, b, loc, scale = team2_parameter
         team2_score = int(np.round(truncnorm.rvs(a, b, loc=loc, scale=scale)))
-        self.talk('It will end', team1_score, ':', team2_score)
+        self.talk( team1, 'vs.', team2, '-',  team1_score, ':', team2_score)
         return team1_score, team2_score
 
     def foretell_games( self, games ):
@@ -119,7 +140,7 @@ class fooracle:
                 games.append(games[ii][::-1])
         
         results = self.foretell_games( games )
-        return results
+        return games, results
 
     def foretell_playoff( self, games ):
         if len(games) > 1 and len(games)%2 == 1:
@@ -131,8 +152,8 @@ class fooracle:
 
         next_round = []
         buffer = None
-        for ii in range(len(results)):
-            winner = get_winner(games[ii], results[ii])
+        for game, result in zip(games, results):
+            winner = get_winner(game, result)
             if buffer is None:
                 buffer = winner
             else:
@@ -140,6 +161,32 @@ class fooracle:
                 buffer = None
         
         return self.foretell_playoff( next_round )
+
+    def foretell_tournament( self, groups ):
+        group_names = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+        standings = []
+        finalists = []
+        for group in groups:
+            games, results = self.foretell_league( group )
+            group_standing = calculate_league_standing( group, games, results )
+            standings.append(group_standing)
+        
+        if self.verbose:
+            for standing, name in zip(standings, group_names):
+                print('Group', name)
+                print(standing)
+    
+        winners = standings[::2] + standings[1::2]
+        seconds = standings[1::2] + standings[::2]
+        
+        for winner, second in zip(winners, seconds):
+            finalists.append([winner.iloc[0].name, second.iloc[1].name])
+
+        print(finalists)
+
+        champion = self.foretell_playoff( finalists )
+
+        return champion
 
     def talk( self, *args ):
         if self.verbose:
