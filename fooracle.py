@@ -51,12 +51,12 @@ class fooracle:
     minimal_sample_size = 5
     verbose = True
 
-    def __init__( self, data = None ):
+    def __init__( self, data = None, use_criteria = True ):
         self.talk('Welcome, you have summoned the fooracle!')
         if not data is None:
-            self.load_data( data )
+            self.load_data( data, use_criteria=use_criteria )
 
-    def load_data(self, data):
+    def load_data(self, data, use_criteria = True):
         """ hard coded for world cup 2018 in Russia
         Assumption: Only non-friendly games, games are on neutral territory or in Russia
         """
@@ -67,7 +67,10 @@ class fooracle:
         self.host = 'Russia'
         participants = ( data.home_team.isin( self.guests + [self.host] ) & ( data.away_team.isin( self.guests + [self.host] ) ) )
         self.criteria = ((neutral_territory | in_host_country) & non_friendly) & participants
-        self.data = data[self.criteria]
+        if use_criteria:
+            self.data = data[self.criteria]
+        else:
+            self.data = data[participants]
         self.talk('I can see the past, now I\'m ready to tell the future...')
 
     def train_model( self, data = None ):
