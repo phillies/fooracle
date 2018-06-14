@@ -175,6 +175,7 @@ class fooracle:
             for standing, name in zip(standings, group_names):
                 print('Group', name)
                 print(standing)
+                print('\n')
     
         winners = standings[::2] + standings[1::2]
         seconds = standings[1::2] + standings[::2]
@@ -182,9 +183,11 @@ class fooracle:
         for winner, second in zip(winners, seconds):
             finalists.append([winner.iloc[0].name, second.iloc[1].name])
 
-        print(finalists)
+        
 
         champion = self.foretell_playoff( finalists )
+
+        print('Winner world cup 2018:', champion)
 
         return champion
 
