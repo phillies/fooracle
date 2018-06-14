@@ -10,8 +10,8 @@ def get_winner( game, result ):
     elif result[0] < result[1]:
         winner = game[1]
     else:
-        #TODO: use some more sophisticated method to solve the draw than this
-        winner = game[0]
+        #if there is a draw we toss a coin
+        winner = game[np.random.randint(2)]
     return winner
 
 def calculate_league_standing( teams, games, results ):
@@ -104,7 +104,7 @@ class fooracle:
         return team1_parameter, team2_parameter
 
 
-    def foretell( self, team1 = None, team2 = None ):
+    def foretell( self, team1 = None, team2 = None, draw_allowed = True ):
         if team1 is None or team2 is None:
             #self.talk('Your teams are incomprehensible. I will look into the future anyhow...')
             team1_parameter, team2_parameter = self.train_model()
@@ -112,19 +112,31 @@ class fooracle:
             #self.talk('Good.', team1, 'vs.', team2, '- I will look into the future...')
             team1_parameter, team2_parameter = self.train_model_on_teams( team1, team2 )
 
-        a, b, loc, scale = team1_parameter
-        team1_score = int(np.round(truncnorm.rvs(a, b, loc=loc, scale=scale)))
-        a, b, loc, scale = team2_parameter
-        team2_score = int(np.round(truncnorm.rvs(a, b, loc=loc, scale=scale)))
+        team1_score = 0
+        team2_score = 0
+        
+        # to make the while loop run exactly once if a draw is allowed we start with 9 which will be incremented to 10 and the loop condition is false
+        if draw_allowed:
+            counter = 9
+        else:
+            counter = 0
+        
+        while team1_score == team2_score and counter < 10:
+            a, b, loc, scale = team1_parameter
+            team1_score = int(np.round(truncnorm.rvs(a, b, loc=loc, scale=scale)))
+            a, b, loc, scale = team2_parameter
+            team2_score = int(np.round(truncnorm.rvs(a, b, loc=loc, scale=scale)))
+            counter += 1
+        
         self.talk( team1, 'vs.', team2, '-',  team1_score, ':', team2_score)
         return team1_score, team2_score
 
-    def foretell_games( self, games ):
+    def foretell_games( self, games, draw_allowed = True ):
         """Predicts all results in the list games. Each entry must be a list of 2 countries.
         """
         results = []
         for game in games:
-            game_result = self.foretell( game[0], game[1] )
+            game_result = self.foretell( game[0], game[1], draw_allowed=draw_allowed )
             results.append(game_result)
 
         return results
@@ -146,7 +158,14 @@ class fooracle:
         if len(games) > 1 and len(games)%2 == 1:
             raise ValueError('Uneven number of games in tournament.')
         
-        results = self.foretell_games( games )
+        if len(games) == 1:
+            print('Final')
+        elif len(games) == 2:
+            print('Semifinal')
+        else:
+            print('Round of best', len(games)*2)
+
+        results = self.foretell_games( games, draw_allowed = False )
         if len(results) == 1:
             return get_winner( games[0], results[0] )
 
@@ -159,17 +178,23 @@ class fooracle:
             else:
                 next_round.append( [ buffer, winner ] )
                 buffer = None
-        
+
+        print('') #new line to separate for a nicer optic        
         return self.foretell_playoff( next_round )
 
     def foretell_tournament( self, groups ):
-        group_names = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+        # supports up to 32 groups ;-)
+        group_names = u'ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜΓΔΘ'
         standings = []
         finalists = []
-        for group in groups:
-            games, results = self.foretell_league( group )
+
+        # calculate the group results as mini-leagues with no second leg game
+        for group, name in zip(groups, group_names):
+            print('Group', name)
+            games, results = self.foretell_league( group, return_match = False )
             group_standing = calculate_league_standing( group, games, results )
             standings.append(group_standing)
+            print('')
         
         if self.verbose:
             for standing, name in zip(standings, group_names):
@@ -177,17 +202,22 @@ class fooracle:
                 print(standing)
                 print('\n')
     
+        # winner of group A [A] plays second of group B [b]
+        # winner of group B [B] plays second of group A [a]
+        # Arranged such that teams from the group phase meet at the finals again
+        # AbCdEfGhBaDcFeHg for the standard 32 team world cup
+        # winners = ACEG + BDFH
+        # seconds = bdfh + aceg
+        # So the zip pairs up the opposing teams
         winners = standings[::2] + standings[1::2]
         seconds = standings[1::2] + standings[::2]
         
         for winner, second in zip(winners, seconds):
             finalists.append([winner.iloc[0].name, second.iloc[1].name])
 
-        
-
         champion = self.foretell_playoff( finalists )
 
-        print('Winner world cup 2018:', champion)
+        print('Tournament champion:', champion)
 
         return champion
 
