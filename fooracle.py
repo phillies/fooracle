@@ -1,8 +1,16 @@
 import sys
-import warnings
 import numpy as np
-from scipy.stats import truncnorm, halfnorm, rv_continuous
+from scipy.stats import halfnorm
 import pandas as pd
+
+
+def get_winner_from_row(row):
+    if row.home_score > row.away_score:
+        return row.home_team
+    elif row.away_score > row.home_score:
+        return row.away_team
+    else:
+        return None
 
 
 def get_winner(game, result):
@@ -57,101 +65,95 @@ class fooracle:
     minimal_sample_size = 5
     verbose = True
     quiet = True
-    model: rv_continuous = None
 
-    def __init__(self, data=None, use_criteria=True, host="Qatar"):
+    def __init__(self, data=None, host="Qatar"):
         self.talk("Welcome, you have summoned the fooracle!")
-
-        if data is not None:
-            self.load_data(data, use_criteria=use_criteria, host=host)
-
-    def load_data(self, data, use_criteria, host):
-        """hard coded for world cup 2018 in Russia
-        Assumption: Only non-friendly games, games are on neutral territory or in Russia
-        """
-        neutral_territory = data.neutral is True
-        in_host_country = (data.neutral is False) & (data.country == host)
-        non_friendly = data.tournament != "Friendly"
         self.host = host
 
-        self.criteria = (neutral_territory | in_host_country) & non_friendly
-        if use_criteria:
-            self.data = data[self.criteria]
+        if data is not None:
+            self.load_games(data)
         else:
-            self.data = data
+            self.load_data()
+
         self.talk(
             f"I can see the past, now I'm ready to tell the future for the tournament in {host}..."
         )
 
-    def train_model(self, data=None):
-        """Fits a truncated normal distribution to the home_score and away_score of the given data set (or the previously loaded data set).
-        Returns the two parameter sets for home and away team"""
-        self.parameter_home = self.fit_model(self.data[["home_score"]])
-        self.parameter_away = self.fit_model(self.data[["away_score"]])
-        return self.parameter_home, self.parameter_away
+    def load_data(self):
+        self.teams = (
+            pd.read_feather("teams.fth").set_index("index").rename_axis(None, axis=0)
+        )
 
-    def fit_model(self, scores):
-        """Fits the truncated normal distribution to the score data.
-        Returns the fitted parameters (a, b, loc, scale) for the scipy.truncnorm distribution"""
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            if self.model == truncnorm:
-                parameter = self.model.fit(scores, self.lower_bound, self.upper_bound)
-            else:
-                parameter = self.model.fit(scores)
-
-        return parameter
-
-    def train_model_on_teams(self, team1, team2):
-        """Fitting the number of scored goals per game to the statistical model
+    def load_games(self, data):
+        """hard coded for world cup 2018 in Russia
+        Assumption: Only non-friendly games, games are on neutral territory or in Russia
         """
-        team1_score = pd.concat(
-            [
-                self.data[self.data.home_team == team1]["home_score"],
-                self.data[self.data.away_team == team1]["away_score"],
+        self.data = data
+
+        self.data["winner"] = self.data.apply(get_winner_from_row, axis=1)
+
+        countries = pd.concat([self.data.home_team, self.data.away_team]).value_counts()
+        winners = self.data.winner.value_counts()
+
+        teams = pd.merge(
+            countries.rename("games"),
+            winners.rename("wins"),
+            left_index=True,
+            right_index=True,
+            how="left",
+        ).fillna(0)
+        teams["win_pct"] = teams.apply(lambda x: x.wins / x.games, axis=1)
+
+        for t, row in teams.iterrows():
+            home_score = self.data[self.data.home_team == t].home_score.dropna()
+            away_score = self.data[self.data.away_team == t].away_score.dropna()
+            total_score = pd.concat([home_score, away_score])
+            if len(home_score) > 10:
+                loc, scale = halfnorm.fit(home_score.values)
+                teams.loc[t, "home_loc"] = loc
+                teams.loc[t, "home_scale"] = scale
+            if len(away_score) > 10:
+                loc, scale = halfnorm.fit(away_score.values)
+                teams.loc[t, "away_loc"] = loc
+                teams.loc[t, "away_scale"] = scale
+            if len(total_score) > 10:
+                loc, scale = halfnorm.fit(total_score.values)
+                teams.loc[t, "total_loc"] = loc
+                teams.loc[t, "total_scale"] = scale
+
+    def get_parameter(self, team, side):
+        if np.isnan(self.teams.loc[team, f"{side}_loc"]) or np.isnan(
+            self.teams.loc[team, f"{side}_scale"]
+        ):
+            if np.isnan(self.teams.loc[team, "total_loc"]) or np.isnan(
+                self.teams.loc[team, "total_scale"]
+            ):
+                return [0, 1]
+            else:
+                return [
+                    self.teams.loc[team, "total_loc"],
+                    self.teams.loc[team, "total_scale"],
+                ]
+        else:
+            return [
+                self.teams.loc[team, f"{side}_loc"],
+                self.teams.loc[team, f"{side}_scale"],
             ]
-        )
-
-        team2_score = pd.concat(
-            [
-                self.data[self.data.home_team == team2]["home_score"],
-                self.data[self.data.away_team == team2]["away_score"],
-            ]
-        )
-
-        if team1_score.size < self.minimal_sample_size:
-            if not self.quiet:
-                self.talk(
-                    "For",
-                    team1,
-                    "the sample size is only",
-                    team1_score.size,
-                    ", fallback to overall home team score statistics",
-                )
-            team1_score = self.data["home_score"]
-
-        if team2_score.size < self.minimal_sample_size:
-            if not self.quiet:
-                self.talk(
-                    "For",
-                    team2,
-                    "the sample size is only",
-                    team2_score.size,
-                    ", fallback to overall away team score statistics",
-                )
-            team2_score = self.data["away_score"]
-
-        team1_parameter = self.fit_model(team1_score)
-        team2_parameter = self.fit_model(team2_score)
-        return team1_parameter, team2_parameter
 
     def foretell(self, team1=None, team2=None, draw_allowed=True):
         if team1 is None or team2 is None:
             # self.talk('Your teams are incomprehensible. I will look into the future anyhow...')
-            team1_parameter, team2_parameter = self.train_model()
+            return
         else:
             # self.talk('Good.', team1, 'vs.', team2, '- I will look into the future...')
-            team1_parameter, team2_parameter = self.train_model_on_teams(team1, team2)
+            if team1 == self.host or self.host is None:
+                team1_parameter = self.get_parameter(team1, "home")
+            else:
+                team1_parameter = self.get_parameter(team1, "away")
+            if team2 == self.host:
+                team2_parameter = self.get_parameter(team2, "home")
+            else:
+                team2_parameter = self.get_parameter(team2, "away")
 
         team1_score = 0
         team2_score = 0
@@ -164,10 +166,11 @@ class fooracle:
 
         while team1_score == team2_score and counter < 10:
             # b, loc, scale = team1_parameter
+            # We use halfnorm, which does not have a b
             team1_score = int(
                 np.round(
-                    self.model.rvs(
-                        *team1_parameter[:-2],
+                    halfnorm.rvs(
+                        # *team1_parameter[:-2],
                         loc=team1_parameter[-2],
                         scale=team1_parameter[-1],
                     )
@@ -176,8 +179,8 @@ class fooracle:
             # b, loc, scale = team2_parameter
             team2_score = int(
                 np.round(
-                    self.model.rvs(
-                        *team2_parameter[:-2],
+                    halfnorm.rvs(
+                        # *team2_parameter[:-2],
                         loc=team2_parameter[-2],
                         scale=team2_parameter[-1],
                     )
@@ -238,9 +241,7 @@ class fooracle:
         print("")  # new line to separate for a nicer optic
         return self.foretell_playoff(next_round)
 
-    def foretell_tournament(self, groups, quiet=True, model=halfnorm):
-        self.model = model
-
+    def foretell_tournament(self, groups, quiet=True):
         # supports up to 32 groups ;-)
         group_names = "ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÜΓΔΘ"
         standings = []
@@ -249,9 +250,7 @@ class fooracle:
         # Check if all teams are existing
         for g in groups:
             for t in g:
-                if (
-                    t not in self.data.home_team.values and t not in self.data.away_team.values
-                ):
+                if t not in self.teams.index:
                     self.talk(
                         f"Warning! {t} not recognized as national team. Maybe a typo?"
                     )
