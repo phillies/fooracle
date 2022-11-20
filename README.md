@@ -1,9 +1,7 @@
 # fooracle
 football (soccer) oracle for prediction games based on historical match data.
-See Jupyter file for a demo on how to use it. Coded for world cup 2018 in Russia. Should work for other tournaments, too. As long as they are similarly structured :-D.
+See Jupyter file for a demo on how to use it. 
 
-General idea: You take the historical results of all games where only teams involved in the world cup were playing. Optionally you remove friendlies and home games for teams other than Russia (that's what the flag in the constructor and loader is for). If you draw the result for a match a truncated normal distribution is fitted to the number of scored goals for each participant and then a random variable is drawn from each distribution to produce the game result.
+Fooracle supports 2 modes, the 'dist' mode where a half normal distribution is fittet to the number of goals a team scored in the past and for each game, a random value is drawn from that distribution to predict the number of goals the team will score, and the 'mlp' mode, where a neural network was trained to predict the outcome of a game.
 
-For play-offs you can pass an argument such that the result is re-drawn 10 times in case of a tie. After 10 ties in a row a coin flip decides the winner.
-
-Requires numpy, scipy, and pandas.
+As the neural netowrk is deterministic and each time e.g. Germany faces Portugal, Germany will win 2:1, you can add some `fairy_dust` to have some random noise on the outcome and make things more surprising.
