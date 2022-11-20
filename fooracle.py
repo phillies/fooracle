@@ -2,6 +2,9 @@ import sys
 import numpy as np
 from scipy.stats import halfnorm
 import pandas as pd
+import os
+import torch
+from torch import nn
 
 
 def get_winner_from_row(row):
@@ -29,6 +32,7 @@ def calculate_league_standing(teams, games, results):
         index=teams, columns=["points", "goals_scored", "goals_taken"]
     ).fillna(0)
     for (game, result) in zip(games, results):
+        result = np.round(result)
         if result[0] == result[1]:
             standings.loc[game[0]].points += 1
             standings.loc[game[1]].points += 1
@@ -49,6 +53,29 @@ def calculate_league_standing(teams, games, results):
     return standings
 
 
+class MLP(nn.Module):
+    '''
+    Multilayer Perceptron for simple regression.
+    '''
+    def __init__(self):
+        super().__init__()
+        self.layers = nn.Sequential(
+            nn.Linear(633, 1024),
+            nn.RReLU(),
+            nn.Linear(1024, 128),
+            nn.RReLU(),
+            nn.Linear(128, 2)
+        )
+
+    def forward(self, x, game_noise=None):
+        '''
+            Forward pass
+        '''
+        x = self.layers(x)
+
+        return x
+
+
 class fooracle:
     """Football oracle
     based on historical results it will tell you what the future brings.
@@ -56,33 +83,53 @@ class fooracle:
     """
 
     host = None
-    criteria = None
-    lower_bound = 0
-    upper_bound = 30
     data = None
     parameter_home = None
     parameter_away = None
     minimal_sample_size = 5
     verbose = True
     quiet = True
+    mlp = None
+    fairy_dust = 0.0
+    teams_encoder = dict()
 
-    def __init__(self, data=None, host="Qatar"):
+    def __init__(self, data: pd.DataFrame | str = "teams.fth", host="Qatar", fairy_dust=0.0, mlp_data='state_dict.pth', mode='mlp'):
+        """Creates the fooracle
+
+        Args:
+            data (pd.DataFrame | str, optional): Kaggle results.csv data to train the distributions or feather file with pre-fit data. Defaults to teams.fth.
+            host (str, optional): _description_. Defaults to "Qatar".
+            fairy_dust (float, optional): Sprinkle fairy dust on the results. Adds random normal noise to the results. 0.0 is 0 noise, 1.0 is 100% noise. Defaults to 0.0.
+            mlp_data (str, optional): _description_. Defaults to 'state_mlp3.pth'.
+            mode (str, optional): if multilayer perceptron (mlp) or distribution fitting (dist) should be used. Defaults to mlp.
+        """
         self.talk("Welcome, you have summoned the fooracle!")
         self.host = host
+        self.fairy_dust = fairy_dust
+        self.mode = mode
 
-        if data is not None:
+        if type(data) is pd.DataFrame():
             self.load_games(data)
         else:
-            self.load_data()
+            self.load_data(data)
+
+        if os.path.exists(mlp_data):
+            self.mlp = MLP()
+            self.mlp.load_state_dict(torch.load(mlp_data))
+            self.mlp.eval()
 
         self.talk(
             f"I can see the past, now I'm ready to tell the future for the tournament in {host}..."
         )
 
-    def load_data(self):
-        self.teams = (
-            pd.read_feather("teams.fth").set_index("index").rename_axis(None, axis=0)
-        )
+    def load_data(self, filename):
+        if os.path.exists(filename):
+            self.teams = (
+                pd.read_feather(filename).set_index("index").rename_axis(None, axis=0)
+            )
+            self.teams_encoder = dict()
+            for t, row in self.teams.iterrows():
+                self.teams_encoder[t] = np.array([int(x) for x in row.encoded.split(';')])
 
     def load_games(self, data):
         """hard coded for world cup 2018 in Russia
@@ -95,31 +142,31 @@ class fooracle:
         countries = pd.concat([self.data.home_team, self.data.away_team]).value_counts()
         winners = self.data.winner.value_counts()
 
-        teams = pd.merge(
+        self.teams = pd.merge(
             countries.rename("games"),
             winners.rename("wins"),
             left_index=True,
             right_index=True,
             how="left",
         ).fillna(0)
-        teams["win_pct"] = teams.apply(lambda x: x.wins / x.games, axis=1)
+        self.teams["win_pct"] = self.teamsteams.apply(lambda x: x.wins / x.games, axis=1)
 
-        for t, row in teams.iterrows():
+        for t, row in self.teams.iterrows():
             home_score = self.data[self.data.home_team == t].home_score.dropna()
             away_score = self.data[self.data.away_team == t].away_score.dropna()
             total_score = pd.concat([home_score, away_score])
             if len(home_score) > 10:
                 loc, scale = halfnorm.fit(home_score.values)
-                teams.loc[t, "home_loc"] = loc
-                teams.loc[t, "home_scale"] = scale
+                self.teamsteams.loc[t, "home_loc"] = loc
+                self.teamsteams.loc[t, "home_scale"] = scale
             if len(away_score) > 10:
                 loc, scale = halfnorm.fit(away_score.values)
-                teams.loc[t, "away_loc"] = loc
-                teams.loc[t, "away_scale"] = scale
+                self.teamsteams.loc[t, "away_loc"] = loc
+                self.teamsteams.loc[t, "away_scale"] = scale
             if len(total_score) > 10:
                 loc, scale = halfnorm.fit(total_score.values)
-                teams.loc[t, "total_loc"] = loc
-                teams.loc[t, "total_scale"] = scale
+                self.teamsteams.loc[t, "total_loc"] = loc
+                self.teamsteams.loc[t, "total_scale"] = scale
 
     def get_parameter(self, team, side):
         if np.isnan(self.teams.loc[team, f"{side}_loc"]) or np.isnan(
@@ -141,6 +188,30 @@ class fooracle:
             ]
 
     def foretell(self, team1=None, team2=None, draw_allowed=True):
+        if self.mode == 'mlp':
+            return self.foretell_mlp(team1, team2, draw_allowed)
+        else:
+            return self.foretell_dist(team1, team2, draw_allowed)
+
+    def foretell_mlp(self, team1=None, team2=None, draw_allowed=True):
+        if team1 == self.host:
+            neutral = 0
+        elif team2 == self.host:
+            neutral = 0
+            team2 = team1
+            team1 = self.host
+        else:
+            neutral = 1
+        game = np.hstack([
+            self.teams_encoder[team1].reshape(1, -1),
+            self.teams_encoder[team2].reshape(1, -1),
+            np.array([neutral]).reshape(1, 1)
+        ])
+        res = self.mlp(torch.Tensor(game)).detach().numpy().flatten()
+        res = np.maximum((1 - self.fairy_dust) * res + self.fairy_dust * np.random.randn(2) * 3.0, 0)
+        return res[0], res[1]
+
+    def foretell_dist(self, team1=None, team2=None, draw_allowed=True):
         if team1 is None or team2 is None:
             # self.talk('Your teams are incomprehensible. I will look into the future anyhow...')
             return
@@ -188,7 +259,6 @@ class fooracle:
             )
             counter += 1
 
-        self.talk(team1, "vs.", team2, "-", team1_score, ":", team2_score)
         return team1_score, team2_score
 
     def foretell_games(self, games, draw_allowed=True):
@@ -196,6 +266,12 @@ class fooracle:
         results = []
         for game in games:
             game_result = self.foretell(game[0], game[1], draw_allowed=draw_allowed)
+            if (int(game_result[0].round()) == int(game_result[1].round()) and not draw_allowed):
+                winner = game[0] if game_result[0] > game_result[1] else game[1]
+                self.talk(game[0], "vs.", game[1], "-", int(game_result[0].round()), ":", int(game_result[1].round()), "after 90 min, winner ", winner)
+            else:
+                self.talk(game[0], "vs.", game[1], "-", int(game_result[0].round()), ":", int(game_result[1].round()))
+
             results.append(game_result)
 
         return results
